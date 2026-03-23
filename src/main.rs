@@ -1,203 +1,130 @@
+mod adapters;
+mod commands;
+mod session;
+
+use anyhow::Result;
 use clap::{Parser, Subcommand};
-use std::fs;
-use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-const CONTEXT_FILENAME: &str = "context.md";
-const GITIGNORE_FILENAME: &str = ".gitignore";
-
-#[derive(Parser, Debug)]
+#[derive(Parser)]
 #[command(
-    name = "context",
-    version,
-    about = "Simple context manager for AI agents"
+    name = "metis",
+    about = "AI context manager — switch coding CLIs without losing context",
+    version
 )]
 struct Cli {
+    /// Project root (defaults to current directory)
+    #[arg(long, global = true, value_name = "PATH")]
+    project: Option<PathBuf>,
+
     #[command(subcommand)]
-    command: Commands,
+    command: Command,
 }
 
-#[derive(Subcommand, Debug)]
-enum Commands {
-    /// Initialize context.md and ensure it is gitignored
+#[derive(Subcommand)]
+enum Command {
+    /// Initialise Metis in this project (creates .metis/, updates .gitignore)
     Init,
 
-    /// Show the current context
-    Show,
-
-    /// Replace context with provided text or stdin
-    Set {
-        /// Text to set. If omitted, reads from stdin.
-        text: Option<String>,
+    /// Start a Metis-managed session with a coding CLI
+    Run {
+        /// The CLI to launch (claude, codex, cursor, copilot, aider)
+        #[arg(value_name = "CLI")]
+        cli: String,
+        /// Extra arguments passed through to the CLI
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
 
-    /// Append text to the context
-    Add {
-        /// Text to append. If omitted, reads from stdin.
-        text: Option<String>,
+    /// End current session, summarise context, switch to another CLI
+    Switch {
+        /// The CLI to switch to
+        #[arg(value_name = "CLI")]
+        cli: String,
+        /// Extra arguments passed through to the new CLI
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
 
-    /// Clear the context file
-    Clear,
+    /// Show current session status
+    Status,
 
-    /// Show current agent (gemini or codex)
-    Agent,
+    /// Show conversation history for this session
+    History {
+        /// Number of most recent turns to show (default: 20)
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+    },
 
-    /// Switch current agent (gemini or codex)
-    Use {
-        /// Agent name: gemini or codex
-        agent: String,
+    /// Record a turn manually (useful for scripting/wrappers)
+    AddTurn {
+        /// Role: user | assistant | system
+        role: String,
+        /// Message content
+        content: String,
+        /// Which CLI this turn came from
+        #[arg(long, default_value = "manual")]
+        cli: String,
+    },
+
+    /// List supported CLIs/adapters
+    Adapters,
+
+    /// Generate shell completions
+    Completion {
+        /// Shell name: bash | zsh | fish | powershell | elvish
+        #[arg(value_name = "SHELL")]
+        shell: String,
     },
 }
 
-fn main() {
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let result = match cli.command {
-        Commands::Init => cmd_init(),
-        Commands::Show => cmd_show(),
-        Commands::Set { text } => cmd_set(text),
-        Commands::Add { text } => cmd_add(text),
-        Commands::Clear => cmd_clear(),
-        Commands::Agent => cmd_agent(),
-        Commands::Use { agent } => cmd_use(agent),
-    };
+    let project_root = cli
+        .project
+        .unwrap_or_else(|| std::env::current_dir().expect("Cannot read current dir"));
 
-    if let Err(err) = result {
-        eprintln!("Error: {err}");
-        std::process::exit(1);
-    }
-}
-
-fn cmd_init() -> io::Result<()> {
-    ensure_context_file()?;
-    Ok(())
-}
-
-fn cmd_show() -> io::Result<()> {
-    ensure_context_file()?;
-    let content = fs::read_to_string(CONTEXT_FILENAME)?;
-    print!("{content}");
-    Ok(())
-}
-
-fn cmd_set(text: Option<String>) -> io::Result<()> {
-    ensure_context_file()?;
-    let content = read_text_or_stdin(text)?;
-    fs::write(CONTEXT_FILENAME, content)?;
-    Ok(())
-}
-
-fn cmd_add(text: Option<String>) -> io::Result<()> {
-    ensure_context_file()?;
-    let addition = read_text_or_stdin(text)?;
-
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(CONTEXT_FILENAME)?;
-
-    if !addition.is_empty() {
-        let needs_newline = !file_ends_with_newline(CONTEXT_FILENAME)?;
-        if needs_newline {
-            writeln!(file)?;
+    match cli.command {
+        Command::Init => {
+            commands::init(&project_root)?;
         }
-        write!(file, "{addition}")?;
-    }
 
-    Ok(())
-}
-
-fn cmd_clear() -> io::Result<()> {
-    ensure_context_file()?;
-    fs::write(CONTEXT_FILENAME, "")?;
-    Ok(())
-}
-
-fn cmd_agent() -> io::Result<()> {
-    let agent = read_agent()?;
-    println!("{agent}");
-    Ok(())
-}
-
-fn cmd_use(agent: String) -> io::Result<()> {
-    let agent = normalize_agent(&agent).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "agent must be 'gemini' or 'codex'",
-        )
-    })?;
-
-    write_agent(&agent)?;
-    println!("Switched to {agent}");
-    Ok(())
-}
-
-fn ensure_context_file() -> io::Result<()> {
-    if !Path::new(CONTEXT_FILENAME).exists() {
-        fs::write(CONTEXT_FILENAME, "")?;
-    }
-    ensure_gitignore()?;
-    Ok(())
-}
-
-fn ensure_gitignore() -> io::Result<()> {
-    let path = Path::new(GITIGNORE_FILENAME);
-    if !path.exists() {
-        fs::write(path, "")?;
-    }
-
-    let content = fs::read_to_string(path)?;
-    if !content.lines().any(|line| line.trim() == CONTEXT_FILENAME) {
-        let mut file = fs::OpenOptions::new().append(true).open(path)?;
-        if !content.ends_with('\n') && !content.is_empty() {
-            writeln!(file)?;
+        Command::Run { cli, args } => {
+            commands::run(&project_root, &cli, &args)?;
         }
-        writeln!(file, "{CONTEXT_FILENAME}")?;
-    }
 
-    Ok(())
-}
+        Command::Switch { cli, args } => {
+            commands::switch(&project_root, &cli, &args)?;
+        }
 
-fn read_text_or_stdin(text: Option<String>) -> io::Result<String> {
-    match text {
-        Some(t) => Ok(t),
-        None => {
-            let mut buf = String::new();
-            io::stdin().read_to_string(&mut buf)?;
-            Ok(buf)
+        Command::Status => {
+            commands::status(&project_root)?;
+        }
+
+        Command::History { limit } => {
+            commands::history(&project_root, limit)?;
+        }
+
+        Command::AddTurn { role, content, cli } => {
+            use session::models::Role;
+            let r = match role.to_lowercase().as_str() {
+                "user" => Role::User,
+                "assistant" => Role::Assistant,
+                "system" => Role::System,
+                other => anyhow::bail!("Unknown role '{}'. Use: user | assistant | system", other),
+            };
+            commands::add_turn(&project_root, r, &content, &cli)?;
+        }
+
+        Command::Adapters => {
+            commands::adapters()?;
+        }
+
+        Command::Completion { shell } => {
+            commands::completion(&shell)?;
         }
     }
-}
 
-fn file_ends_with_newline(path: &str) -> io::Result<bool> {
-    let content = fs::read_to_string(path)?;
-    Ok(content.ends_with('\n') || content.is_empty())
-}
-
-fn agent_path() -> PathBuf {
-    Path::new(CONTEXT_FILENAME).with_file_name(".context_agent")
-}
-
-fn read_agent() -> io::Result<String> {
-    let path = agent_path();
-    if !path.exists() {
-        return Ok("codex".to_string());
-    }
-    let raw = fs::read_to_string(path)?;
-    let agent = normalize_agent(raw.trim()).unwrap_or("codex".to_string());
-    Ok(agent)
-}
-
-fn write_agent(agent: &str) -> io::Result<()> {
-    fs::write(agent_path(), agent)?;
     Ok(())
-}
-
-fn normalize_agent(input: &str) -> Option<String> {
-    match input.trim().to_lowercase().as_str() {
-        "gemini" => Some("gemini".to_string()),
-        "codex" => Some("codex".to_string()),
-        _ => None,
-    }
 }
