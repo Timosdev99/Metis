@@ -6,6 +6,6 @@ pub fn adapter() -> CliAdapter {
         binary: "qwen",
         // Qwen CLI injection is not standardized; default to manual paste
         injection: InjectionMethod::PrintOnly,
-        launch: LaunchMode::Pty,
+        launch: LaunchMode::Inherit,
     }
 }
