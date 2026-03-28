@@ -1,5 +1,6 @@
 pub mod adapters;
 pub mod add_turn;
+pub mod clean;
 pub mod completion;
 pub mod history;
 pub mod init;
@@ -9,6 +10,7 @@ pub mod switch;
 
 pub use adapters::handle as adapters;
 pub use add_turn::handle as add_turn;
+pub use clean::handle as clean;
 pub use completion::handle as completion;
 pub use history::handle as history;
 pub use init::handle as init;

@@ -4,6 +4,9 @@
 pub enum InjectionMethod {
     /// Pass context as a --system or similar flag: `<cli> --system "<ctx>"`
     Flag { flag: &'static str },
+    /// Send context as initial stdin (typed into the PTY).
+    Stdin,
+    #[allow(dead_code)]
     /// No automatic injection — Metis prints the context for the user to paste
     PrintOnly,
 }
@@ -16,11 +19,21 @@ pub enum LaunchMode {
     Inherit,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PtyMode {
+    /// Pass PTY output straight through to stdout (no screen re-render).
+    Passthrough,
+    #[allow(dead_code)]
+    /// Re-render the screen using a VT100 parser (legacy mode).
+    Repaint,
+}
+
 pub struct CliAdapter {
     pub name: &'static str,
     pub binary: &'static str,
     pub injection: InjectionMethod,
     pub launch: LaunchMode,
+    pub pty_mode: PtyMode,
 }
 
 impl CliAdapter {
@@ -39,6 +52,10 @@ impl CliAdapter {
                 args.push(handoff_prompt.to_string());
                 args.extend_from_slice(extra_args);
                 None
+            }
+            InjectionMethod::Stdin => {
+                args.extend_from_slice(extra_args);
+                Some(handoff_prompt.to_string())
             }
             InjectionMethod::PrintOnly => {
                 args.extend_from_slice(extra_args);
