@@ -1,4 +1,5 @@
-use crate::session::models::{Role, Session, Turn};
+use crate::session::clean::{sanitize_assistant_output, sanitize_user_input, strip_ansi};
+use crate::session::models::{Role, Session};
 
 /// Builds a markdown summary from raw session turns without any API calls.
 /// Uses simple rule-based extraction:
@@ -12,6 +13,8 @@ impl ContextBuilder {
     pub fn build_summary(session: &Session) -> String {
         let mut out = String::new();
 
+        let cleaned = clean_turns(session);
+
         out.push_str("## Metis Session Summary\n\n");
         out.push_str(&format!("**Project:** {}\n", session.project));
         out.push_str(&format!(
@@ -22,11 +25,8 @@ impl ContextBuilder {
         out.push_str(&format!("**Turns:** {}\n\n", session.turn_count()));
 
         // --- What was worked on ---
-        let user_turns: Vec<&Turn> = session
-            .turns
-            .iter()
-            .filter(|t| t.role == Role::User)
-            .collect();
+        let user_turns: Vec<&CleanTurn> =
+            cleaned.iter().filter(|t| t.role == Role::User).collect();
 
         if !user_turns.is_empty() {
             out.push_str("### What was being worked on\n\n");
@@ -40,7 +40,7 @@ impl ContextBuilder {
         }
 
         // --- Files mentioned ---
-        let files = extract_file_mentions(session);
+        let files = extract_file_mentions(&cleaned);
         if !files.is_empty() {
             out.push_str("### Files mentioned\n\n");
             for f in &files {
@@ -50,11 +50,27 @@ impl ContextBuilder {
         }
 
         // --- Open threads ---
-        let open_threads = extract_open_threads(session);
+        let open_threads = extract_open_threads(&cleaned);
         if !open_threads.is_empty() {
             out.push_str("### Open threads\n\n");
             for thread in &open_threads {
                 out.push_str(&format!("- {}\n", thread));
+            }
+            out.push('\n');
+        }
+
+        // --- Recent conversation ---
+        let recent_turns = cleaned.iter().rev().take(8).rev().collect::<Vec<_>>();
+        if !recent_turns.is_empty() {
+            out.push_str("### Recent conversation\n\n");
+            for turn in recent_turns {
+                let snippet = first_line(&turn.content, 140);
+                let role = match turn.role {
+                    Role::User => "user",
+                    Role::Assistant => "assistant",
+                    Role::System => "system",
+                };
+                out.push_str(&format!("- `{}` {}: {}\n", turn.cli, role, snippet));
             }
             out.push('\n');
         }
@@ -96,16 +112,42 @@ fn first_line(s: &str, max: usize) -> String {
     }
 }
 
-fn extract_file_mentions(session: &Session) -> Vec<String> {
+#[derive(Debug, Clone)]
+struct CleanTurn {
+    role: Role,
+    cli: String,
+    content: String,
+}
+
+fn clean_turns(session: &Session) -> Vec<CleanTurn> {
+    let mut out = Vec::new();
+    for t in &session.turns {
+        let content = match t.role {
+            Role::User => sanitize_user_input(&t.content),
+            Role::Assistant | Role::System => sanitize_assistant_output(&t.cli, &t.content),
+        };
+        let content = strip_ansi(&content).trim().to_string();
+        if content.is_empty() {
+            continue;
+        }
+        out.push(CleanTurn {
+            role: t.role.clone(),
+            cli: t.cli.clone(),
+            content,
+        });
+    }
+    out
+}
+
+fn extract_file_mentions(turns: &[CleanTurn]) -> Vec<String> {
     let extensions = [
         ".rs", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".toml", ".json", ".md", ".yaml",
         ".yml", ".env", ".sql", ".sh",
     ];
     let mut files: Vec<String> = Vec::new();
 
-    for turn in &session.turns {
+    for turn in turns {
         for word in turn.content.split_whitespace() {
-            // strip surrounding punctuation
             let clean = word
                 .trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '_' && c != '/');
             if extensions.iter().any(|ext| clean.ends_with(ext))
@@ -119,7 +161,7 @@ fn extract_file_mentions(session: &Session) -> Vec<String> {
     files
 }
 
-fn extract_open_threads(session: &Session) -> Vec<String> {
+fn extract_open_threads(turns: &[CleanTurn]) -> Vec<String> {
     let triggers = [
         "todo",
         "still need",
@@ -132,7 +174,7 @@ fn extract_open_threads(session: &Session) -> Vec<String> {
     ];
     let mut threads: Vec<String> = Vec::new();
 
-    for turn in session.turns.iter().filter(|t| t.role == Role::User) {
+    for turn in turns.iter().filter(|t| t.role == Role::User) {
         for line in turn.content.lines() {
             let lower = line.to_lowercase();
             if triggers.iter().any(|t| lower.contains(t)) {

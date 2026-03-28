@@ -34,6 +34,9 @@ enum Command {
         /// Extra arguments passed through to the CLI
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
+        /// Delay before injecting handoff (ms)
+        #[arg(long, default_value = "500")]
+        inject_delay_ms: u64,
     },
 
     /// End current session, summarise context, switch to another CLI
@@ -44,6 +47,9 @@ enum Command {
         /// Extra arguments passed through to the new CLI
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
+        /// Delay before injecting handoff (ms)
+        #[arg(long, default_value = "500")]
+        inject_delay_ms: u64,
     },
 
     /// Show current session status
@@ -55,6 +61,9 @@ enum Command {
         #[arg(short, long, default_value = "20")]
         limit: usize,
     },
+
+    /// Clean stored turns (remove UI noise, ANSI, junk)
+    Clean,
 
     /// Record a turn manually (useful for scripting/wrappers)
     AddTurn {
@@ -90,12 +99,20 @@ fn main() -> Result<()> {
             commands::init(&project_root)?;
         }
 
-        Command::Run { cli, args } => {
-            commands::run(&project_root, &cli, &args)?;
+        Command::Run {
+            cli,
+            args,
+            inject_delay_ms,
+        } => {
+            commands::run(&project_root, &cli, &args, inject_delay_ms)?;
         }
 
-        Command::Switch { cli, args } => {
-            commands::switch(&project_root, &cli, &args)?;
+        Command::Switch {
+            cli,
+            args,
+            inject_delay_ms,
+        } => {
+            commands::switch(&project_root, &cli, &args, inject_delay_ms)?;
         }
 
         Command::Status => {
@@ -104,6 +121,10 @@ fn main() -> Result<()> {
 
         Command::History { limit } => {
             commands::history(&project_root, limit)?;
+        }
+
+        Command::Clean => {
+            commands::clean(&project_root)?;
         }
 
         Command::AddTurn { role, content, cli } => {

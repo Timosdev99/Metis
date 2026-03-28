@@ -1,4 +1,4 @@
-use crate::adapters::{CliAdapter, InjectionMethod, LaunchMode};
+use crate::adapters::{CliAdapter, InjectionMethod, LaunchMode, PtyMode};
 
 pub fn adapter() -> CliAdapter {
     CliAdapter {
@@ -7,5 +7,6 @@ pub fn adapter() -> CliAdapter {
         // Claude Code accepts a system prompt via --system flag
         injection: InjectionMethod::Flag { flag: "--system" },
         launch: LaunchMode::Pty,
+        pty_mode: PtyMode::Passthrough,
     }
 }
