@@ -4,8 +4,6 @@
 pub enum InjectionMethod {
     /// Pass context as a --system or similar flag: `<cli> --system "<ctx>"`
     Flag { flag: &'static str },
-    /// Prepend context as the first message piped to stdin
-    Stdin,
     /// No automatic injection — Metis prints the context for the user to paste
     PrintOnly,
 }
@@ -41,10 +39,6 @@ impl CliAdapter {
                 args.push(handoff_prompt.to_string());
                 args.extend_from_slice(extra_args);
                 None
-            }
-            InjectionMethod::Stdin => {
-                args.extend_from_slice(extra_args);
-                Some(handoff_prompt.to_string())
             }
             InjectionMethod::PrintOnly => {
                 args.extend_from_slice(extra_args);
